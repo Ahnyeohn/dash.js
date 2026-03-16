@@ -78,7 +78,8 @@
         <div class="row title-header">
 
             <div class="branding">
-                <a href="http://dashif.org/" target="_blank"><img class="image" src="app/img/if.png" /></a>
+                <a href="http://dashif.org/" target="_blank"><img class="image"
+                        src="../dash-if-reference-player/img/if.png" /></a>
                 <span id="big-title">Reference Client</span>
                 <span ng-bind="version"></span>
                 <span id="commit-info"><!-- commit-info --></span>
@@ -132,8 +133,8 @@
                 </div>
                 <input type="text" class="form-control" ng-model="selectedItem.url">
                 <span class="input-group-btn">
-                    <button class="btn btn-default ng-binding" ng-click="toggleOptionsGutter(!optionsGutter)">Show
-                        options</button>
+                    <button class="btn btn-default" ng-click="toggleOptionsGutter(!optionsGutter)"
+                        ng-cloak>{{getOptionsButtonLabel()}}</button>
                     <button class="btn btn-default" type="button" ng-click="doStop()">Stop</button>
                     <button class="btn btn-primary" type="button" ng-click="doLoad()">Load</button>
                     <!-- Testbutton -->
@@ -254,6 +255,21 @@
                                     ng-click="changeLiveCatchupMode('liveCatchupModeLoLP')" value="liveCatchupModeLoLP">
                                 LoL+ based
                             </label>
+                            <label data-toggle="tooltip" data-placement="right"
+                                title="Step based catchup mechanism to keep the desired live latency.">
+                                <input type="radio" id="liveCatchupModeStep" autocomplete="off"
+                                    ng-model="liveCatchupMode" name="catchupMode"
+                                    ng-click="changeLiveCatchupMode('liveCatchupModeStep')" value="liveCatchupModeStep">
+                                Step based
+                            </label>
+
+                            <label class="options-label">Max Drift:</label>
+                            <input type="number" class="form-control" placeholder="value in seconds" ng-model="maxDrift"
+                                ng-change="updateMaxDrift()">
+
+                            <label class="options-label">Live Threshold:</label>
+                            <input type="text" class="form-control" placeholder="value in seconds"
+                                ng-model="liveThreshold" ng-change="updateLiveThreshold()">
                         </div>
                     </div>
                 </div>
@@ -942,7 +958,7 @@
                         INFO
                     </label>
                     <label data-toggle="tooltip" data-placement="right" title="Sets log level of to LOG_LEVEL_DEBUG">
-                        <input type="radio" id="log-debug" value="debug" autocomplete="off" name="log-level" E
+                        <input type="radio" id="log-debug" value="debug" autocomplete="off" name="log-level"
                             ng-model="currentLogLevel" ng-click="setLogLevel()">
                         DEBUG
                     </label>
@@ -1435,132 +1451,163 @@
                 <div class="col-md-12">
                     <h3 class="footer-text">Contributors:</h3>
                     <a ng-repeat="item in contributors" class="footer-text" href="{{item.link}}" target="_blank">
-                        <img ng-show="hasLogo(item)" ng-src="{{item.logo}}" alt="{{item.link}}" />
+                        <img ng-show="hasLogo(item)" ng-src="../dash-if-reference-player/{{item.logo}}"
+                            alt="{{item.link}}" />
                         <span class="contributor" ng-show="!hasLogo(item)">{{item.name}}</span>
                     </a>
                 </div>
             </div>
         </div>
     </div>
+</body>
 
-    <script>
-        (function () {
-            const MAX_WAIT_MS = 5000;
-            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+<script>
+    (function () {
+        const MAX_WAIT_MS = 5000;
+        const STATS_INTERVAL_MS = 1000;
 
-            async function waitFor(fn, timeout = MAX_WAIT_MS) {
-                const start = Date.now();
-                while (Date.now() - start < timeout) {
-                    const v = fn();
-                    if (v) return v;
-                    await sleep(100);
-                }
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        async function waitFor(fn, timeout = MAX_WAIT_MS) {
+            const start = Date.now();
+            while (Date.now() - start < timeout) {
+                const v = fn();
+                if (v) return v;
+                await sleep(100);
+            }
+            return null;
+        }
+
+        function getDashScope() {
+            const el = document.querySelector('body[ng-controller="DashController"]');
+            if (!el || !window.angular) return null;
+
+            try {
+                return window.angular.element(el).scope() || null;
+            } catch (e) {
+                console.warn('[dash-if] failed to get Angular scope:', e);
                 return null;
             }
+        }
 
-            function getDashScope() {
-                const el = document.querySelector('body[ng-controller="DashController"]');
-                if (!window.angular || !el) return null;
-                return window.angular.element(el).scope() || null;
-            }
+        function pickDefined(obj) {
+            return Object.fromEntries(
+                Object.entries(obj).filter(([, v]) => v !== undefined)
+            );
+        }
 
-            function safeNumber(v) {
-                // dash-if는 "1.2 | 3.4 | 5.6" 같은 문자열도 있을 수 있어 그대로 보내도 됨
-                return v;
-            }
+        function sendDashStats() {
+            const scope = getDashScope();
+            if (!scope) return;
 
-            function sendDashStats() {
-                const scope = getDashScope();
-                if (!scope) return;
+            const stats = pickDefined({
+                videoLatency: scope.videoLatency,
+                videoDownload: scope.videoDownload,
+                videoRatio: scope.videoRatio,
+                videoMtpMbps: scope.videoMtpMbps ?? scope.videoMtp,
+                videoBufferLength: scope.videoBufferLength,
+                videoDroppedFrames: scope.videoDroppedFrames,
+                videoBitrate: scope.videoBitrate,
+                videoIndex: scope.videoIndex,
+                isDynamic: !!scope.isDynamic
+            });
 
-                // 값이 undefined면 그대로 두고, 존재하는 것만 모아서 보냄
-                const stats = {
-                    videoLatency: safeNumber(scope.videoLatency),           // "min|avg|max"
-                    videoDownload: safeNumber(scope.videoDownload),
-                    videoRatio: safeNumber(scope.videoRatio),
-                    videoMtpMbps: safeNumber(scope.videoMtp),               // "Mbps" 텍스트는 UI에서 붙이므로 값만
-                    //videoLiveLatency: safeNumber(scope.videoLiveLatency),   // live일 때만 의미
-                    isDynamic: !!scope.isDynamic
-                };
-
-                window.parent.postMessage({
+            window.parent.postMessage(
+                {
                     type: 'PLAYER_STATS',
                     player: 'dash',
                     ts: performance.now(),
-                    stats: stats
-                }, '*');
-            }
+                    stats
+                },
+                '*'
+            );
+        }
 
-            function setUrlThenLoad(scope, url) {
-                const work = () => {
-                    scope.selectedItem = scope.selectedItem || {};
-                    scope.selectedItem.url = url;
-                    if ('value' in scope.selectedItem) scope.selectedItem.value = url;
+        function setUrlThenLoad(scope, url) {
+            const work = () => {
+                scope.selectedItem = scope.selectedItem || {};
+                scope.selectedItem.url = url;
 
-                    if (typeof scope.doLoad === 'function') scope.doLoad();
-                    else throw new Error('scope.doLoad not found');
-                };
+                if ('value' in scope.selectedItem) {
+                    scope.selectedItem.value = url;
+                }
 
-                // digest 중이면 evalAsync로 다음 digest 사이클에 실행
-                if (scope.$$phase) {
-                    scope.$evalAsync(work);
+                if (typeof scope.doLoad === 'function') {
+                    scope.doLoad();
                 } else {
-                    scope.$apply(work);
+                    throw new Error('scope.doLoad not found');
                 }
+            };
+
+            if (scope.$$phase) {
+                scope.$evalAsync(work);
+            } else {
+                scope.$apply(work);
+            }
+        }
+
+        async function setUrlAndPlayDash(url) {
+            if (!url) throw new Error('videoUrl empty');
+
+            const scope = await waitFor(getDashScope);
+            if (!scope) throw new Error('DashController scope not ready');
+
+            setUrlThenLoad(scope, url);
+        }
+
+        function replyToSource(event, payload) {
+            try {
+                if (event.source && typeof event.source.postMessage === 'function') {
+                    const targetOrigin =
+                        event.origin && event.origin !== 'null' ? event.origin : '*';
+                    event.source.postMessage(payload, targetOrigin);
+                }
+            } catch (e) {
+                console.warn('[dash-if] failed to reply:', e);
+            }
+        }
+
+        window.addEventListener('message', async (event) => {
+            const msg = event.data;
+            if (!msg || msg.type !== 'PLAYER_CONTROL') return;
+            if (msg.action !== 'SET_URL_AND_PLAY') return;
+
+            try {
+                await setUrlAndPlayDash(msg.videoUrl);
+                replyToSource(event, {
+                    type: 'PLAYER_CONTROL_ACK',
+                    ok: true,
+                    player: 'dash'
+                });
+            } catch (e) {
+                replyToSource(event, {
+                    type: 'PLAYER_CONTROL_ACK',
+                    ok: false,
+                    player: 'dash',
+                    error: e.message
+                });
+            }
+        });
+
+        window.addEventListener('load', async () => {
+            const scope = await waitFor(getDashScope);
+            if (!scope) {
+                console.warn('[dash-if] DashController scope not ready after load');
+                return;
             }
 
-            async function setUrlAndPlayDash(url) {
-                if (!url) throw new Error('videoUrl empty');
+            window.parent.postMessage(
+                { type: 'PLAYER_READY', player: 'dash' },
+                '*'
+            );
+            console.log('[dash-if] receiver ready');
 
-                // 1️ Angular scope 준비 대기
-                const scope = await waitFor(getDashScope);
-                if (!scope) throw new Error('DashController scope not ready');
+            sendDashStats();
+            setInterval(sendDashStats, STATS_INTERVAL_MS);
 
-                // 2️ URL 세팅
-                setUrlThenLoad(scope, url);
-            }
-
-            // 메시지 수신
-            window.addEventListener('message', async (event) => {
-                const msg = event.data;
-                if (!msg || msg.type !== 'PLAYER_CONTROL') return;
-                if (msg.action !== 'SET_URL_AND_PLAY') return;
-
-                try {
-                    await setUrlAndPlayDash(msg.videoUrl);
-                    event.source?.postMessage(
-                        { type: 'PLAYER_CONTROL_ACK', ok: true, player: 'dash' },
-                        event.origin
-                    );
-                } catch (e) {
-                    event.source?.postMessage(
-                        { type: 'PLAYER_CONTROL_ACK', ok: false, error: e.message },
-                        event.origin
-                    );
-                }
-            });
-
-            // READY 신호 (리스너 등록 + Angular 로딩 이후)
-            window.addEventListener('load', async () => {
-                await waitFor(getDashScope);
-                window.parent.postMessage(
-                    { type: 'PLAYER_READY', player: 'dash' },
-                    '*'
-                );
-                console.log('[dash-if] receiver ready');
-
-                // 2) 지표 전송 시작
-                const INTERVAL_MS = 1000;
-                sendDashStats();
-
-                setInterval(sendDashStats, INTERVAL_MS);
-
-                console.log('[dash-if] stats sender started');
-
-            });
-        })();
-    </script>
-</body>
-
+            console.log('[dash-if] stats sender started');
+        });
+    })();
+</script>
 
 </html>
